@@ -1,0 +1,61 @@
+# MinerUtoMD 配置文件
+
+# MinerU 配置
+mineru:
+  # 输出格式: markdown, json, content_list
+  output_format: "markdown"
+  # 是否保留图片
+  keep_images: true
+  # 图片输出目录名
+  image_dir: "images"
+  # 是否启用OCR（扫描件PDF需要）
+  enable_ocr: true
+  # OCR语言
+  ocr_lang: "ch"  # ch=中文, en=英文
+  # 解析方法: auto, txt, ocr
+  parse_method: "auto"
+  # 是否启用公式识别（需要 MinerU 3.x）
+  enable_formula: true
+  # 是否启用表格识别
+  enable_table: false
+  # 后端: pipeline (本地模型), hybrid-auto-engine (需要VLM模型)
+  backend: "pipeline"
+
+# Pandoc 配置
+pandoc:
+  # Pandoc 可执行文件路径
+  path: "C:/Users/Administrator/AppData/Local/Microsoft/WinGet/Packages/JohnMacFarlane.Pandoc_Microsoft.Winget.Source_8wekyb3d8bbwe/pandoc-3.9.0.2/pandoc.exe"
+  # Word输出模板（可选）
+  word_template: null
+  # PDF引擎
+  pdf_engine: "wkhtmltopdf"  # 或 "xelatex", "weasyprint"
+  # 默认输出格式
+  default_format: "docx"
+  # 额外参数
+  extra_args:
+    - "--toc"
+    - "--toc-depth=3"
+
+# Markdown 优化配置
+markdown_optimizer:
+  # 是否清理多余空行
+  clean_empty_lines: true
+  # 是否统一标题层级
+  normalize_headers: true
+  # 是否修复列表缩进
+  fix_list_indent: true
+  # 是否优化表格格式
+  optimize_tables: true
+  # 是否移除HTML标签
+  remove_html_tags: false
+
+# 输出配置
+output:
+  # 输出目录
+  directory: "./output"
+  # 文件命名规则: original, timestamp, custom
+  naming: "original"
+  # 是否覆盖已存在文件
+  overwrite: false
+  # 是否保留中间文件
+  keep_intermediate: false
