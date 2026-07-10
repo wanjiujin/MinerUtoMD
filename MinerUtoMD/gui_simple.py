@@ -145,8 +145,8 @@ class MinerUtoMDApp:
     def apply_detected_paths(self):
         mineru_cfg = self.base_config.setdefault('mineru', {})
         pandoc_cfg = self.base_config.setdefault('pandoc', {})
-        if self.python_exe:
-            mineru_cfg.setdefault('python_exe', self.python_exe)
+        if self.python_exe and not mineru_cfg.get('python_exe'):
+            mineru_cfg['python_exe'] = self.python_exe
         if self.pandoc_path:
             pandoc_cfg['path'] = self.pandoc_path
         if self.pdf_engine:
