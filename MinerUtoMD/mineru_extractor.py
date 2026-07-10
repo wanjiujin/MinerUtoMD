@@ -204,6 +204,22 @@ class MinerUExtractor:
         """检查MinerU是否正确安装"""
         if self.cli_path and Path(self.cli_path).exists():
             return True
+
+        if self.python_exe and Path(self.python_exe).exists():
+            module_name = 'mineru' if self.version == 3 else 'magic_pdf'
+            try:
+                result = subprocess.run(
+                    [self.python_exe, '-c', f'import {module_name}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    creationflags=SUBPROCESS_FLAGS
+                )
+                if result.returncode == 0:
+                    return True
+                logger.error(f"MinerU Python环境不可用: {result.stderr[:300] if result.stderr else result.returncode}")
+            except Exception as exc:
+                logger.error(f"MinerU Python环境检测失败: {exc}")
         
         # 检查PATH
         for cmd in ['mineru', 'magic-pdf']:
