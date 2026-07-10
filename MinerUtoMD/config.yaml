@@ -1,4 +1,9 @@
-# MinerUtoMD 配置文件
+# MinerUtoMD 配置模板
+#
+# 这个文件只保存可复用的默认配置，不写入某一台电脑专属的 D 盘路径。
+# 首次部署时请运行:
+#   python MinerUtoMD/init_environment.py --write-config
+# 脚本会自动探测本机 Python/MinerU/Pandoc/wkhtmltopdf 路径，并按需生成本机配置。
 
 # MinerU 配置
 mineru:
@@ -21,26 +26,33 @@ mineru:
   # 后端: pipeline (本地模型), hybrid-auto-engine (需要VLM模型)
   backend: "pipeline"
   # 计算设备: auto (自动检测), cuda (GPU), cpu, npu
-  # GPU 加速可显著提升公式识别和表格识别速度
-  # auto 模式会自动检测是否有可用的 CUDA 设备
   device: "auto"
-  # 模型来源: local, huggingface, modelscope
-  # local 避免运行时联网下载，需配置 mineru_tools_config_json
-  model_source: "local"
-  mineru_tools_config_json: "D:/Dmate工作区/MInerUtoMD/MinerUtoMD/mineru_local_models.json"
-  hf_home: "D:/CDriveMoved/hf_cache"
-  hf_hub_cache: "D:/CDriveMoved/hf_cache/hub"
+
+  # 模型来源: huggingface, modelscope, local
+  # 推荐新电脑先用 huggingface/modelscope；离线部署再切换 local。
+  model_source: "huggingface"
+  # 本地模型配置文件路径。留空时由 MinerU 默认逻辑或初始化脚本处理。
+  mineru_tools_config_json: null
+  # HuggingFace 缓存目录。留空表示使用系统默认缓存或环境变量。
+  hf_home: null
+  hf_hub_cache: null
+
+  # 可选：显式指定 MinerU 所在 Python/CLI。留空时自动从当前环境和 PATH 中查找。
+  python_exe: null
+  mineru_cli_v3: null
+  mineru_cli_v1: null
+
   # MinerU 子进程超时（秒）
   timeout: 600
 
 # Pandoc 配置
 pandoc:
-  # Pandoc 可执行文件路径
-  path: "D:/CDriveMoved/miniforge3/envs/mineru2/Library/bin/pandoc.exe"
+  # Pandoc 可执行文件路径。默认从 PATH 查找；也可填绝对路径。
+  path: "pandoc"
   # Word输出模板（可选）
   word_template: null
-  # PDF引擎
-  pdf_engine: "D:/CDriveMoved/miniforge3/envs/mineru2/Library/bin/wkhtmltopdf.exe"  # 或 "xelatex", "weasyprint"
+  # PDF引擎。默认从 PATH 查找 wkhtmltopdf；也可填绝对路径或改为 xelatex/weasyprint。
+  pdf_engine: "wkhtmltopdf"
   # 默认输出格式
   default_format: "docx"
   # 额外参数
@@ -68,8 +80,6 @@ watermark_remover:
   # 去除模式: fast (快速，基于颜色阈值), deep (深度，基于边缘+频域分析)
   mode: "fast"
   # 快速模式：水印灰度范围（仅检测浅色水印，如浅灰/白色半透明水印）
-  # 范围越窄越精确，误伤越少；(220,255) 适合大多数浅色水印
-  # 如果水印颜色偏深，可降低下限如 (180,255)
   watermark_gray_range: [220, 255]
   # 最小水印面积（像素），低于此值的连通域不处理
   min_area: 500
@@ -88,3 +98,5 @@ output:
   overwrite: false
   # 是否保留中间文件
   keep_intermediate: false
+  # 是否写出质量报告 JSON。默认关闭，避免生成额外文件。
+  write_quality_report: false

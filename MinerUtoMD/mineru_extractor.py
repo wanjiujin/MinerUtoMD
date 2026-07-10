@@ -23,12 +23,11 @@ else:
 class MinerUExtractor:
     """MinerU PDF提取器"""
     
-    # Python 解释器路径
-    PYTHON_V3 = r"D:\CDriveMoved\miniforge3\envs\mineru2\python.exe"
-    PYTHON_V1 = r"D:\CDriveMoved\miniforge3\envs\mineru\python.exe"
-    # CLI 路径（备用）
-    MINERU_CLI_V3 = r"D:\CDriveMoved\miniforge3\envs\mineru2\Scripts\mineru.exe"
-    MINERU_CLI_V1 = r"D:\CDriveMoved\miniforge3\envs\mineru\Scripts\magic-pdf.exe"
+    # 可移植默认值：优先使用当前环境和 PATH；本机固定路径由 init_environment.py 写入配置。
+    PYTHON_V3 = None
+    PYTHON_V1 = None
+    MINERU_CLI_V3 = None
+    MINERU_CLI_V1 = None
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -38,10 +37,11 @@ class MinerUExtractor:
             config: 配置字典
         """
         self.config = config or {}
-        self.python_v3 = self.config.get('python_v3') or self.config.get('python_exe_v3') or self.PYTHON_V3
+        python_exe = self.config.get('python_exe')
+        self.python_v3 = self.config.get('python_v3') or self.config.get('python_exe_v3') or python_exe or self.PYTHON_V3
         self.python_v1 = self.config.get('python_v1') or self.config.get('python_exe_v1') or self.PYTHON_V1
-        self.mineru_cli_v3 = self.config.get('mineru_cli_v3') or self.MINERU_CLI_V3
-        self.mineru_cli_v1 = self.config.get('mineru_cli_v1') or self.MINERU_CLI_V1
+        self.mineru_cli_v3 = self.config.get('mineru_cli_v3') or shutil.which('mineru') or self.MINERU_CLI_V3
+        self.mineru_cli_v1 = self.config.get('mineru_cli_v1') or shutil.which('magic-pdf') or self.MINERU_CLI_V1
         self.keep_images = self.config.get('keep_images', True)
         self.image_dir = self.config.get('image_dir', 'images')
         # MinerU 解析方法: ocr, txt, auto
@@ -65,24 +65,24 @@ class MinerUExtractor:
     
     def _detect_version(self):
         """检测 MinerU 版本"""
-        if Path(self.python_v3).exists():
+        if self.python_v3 and Path(self.python_v3).exists():
             self.python_exe = self.python_v3
             self.cli_path = self.mineru_cli_v3
             self.version = 3
             logger.info("使用 MinerU 3.x (支持公式识别)")
-        elif Path(self.python_v1).exists():
+        elif self.python_v1 and Path(self.python_v1).exists():
             self.python_exe = self.python_v1
             self.cli_path = self.mineru_cli_v1
             self.version = 1
             logger.info("使用 MinerU 1.x (magic-pdf, 不支持公式识别)")
-        elif shutil.which('mineru'):
+        elif self.mineru_cli_v3:
             self.python_exe = sys.executable
-            self.cli_path = shutil.which('mineru')
+            self.cli_path = self.mineru_cli_v3
             self.version = 3
             logger.info("使用 PATH 中的 MinerU 3.x CLI")
-        elif shutil.which('magic-pdf'):
+        elif self.mineru_cli_v1:
             self.python_exe = sys.executable
-            self.cli_path = shutil.which('magic-pdf')
+            self.cli_path = self.mineru_cli_v1
             self.version = 1
             logger.info("使用 PATH 中的 MinerU 1.x (magic-pdf)")
         else:

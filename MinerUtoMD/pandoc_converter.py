@@ -56,6 +56,11 @@ class PandocConverter:
             if fallback:
                 logger.warning(f"Pandoc配置路径不存在，已切换到PATH: {fallback}")
                 self.pandoc_path = fallback
+
+        if self.pdf_engine and not Path(str(self.pdf_engine)).exists():
+            fallback_engine = shutil.which(str(self.pdf_engine))
+            if fallback_engine:
+                self.pdf_engine = fallback_engine
     
     def check_installation(self) -> bool:
         """检查Pandoc是否正确安装"""

@@ -23,9 +23,8 @@ if sys.platform == 'win32':
 else:
     SUBPROCESS_FLAGS = 0
 
-# 设置环境变量
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-os.environ['HF_HOME'] = 'D:/CDriveMoved/hf_cache'
+# 设置默认镜像地址；缓存目录由系统环境变量或 config.yaml 决定。
+os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 
 VERSION = "1.2.0"
 
@@ -42,10 +41,11 @@ class MinerUtoMDApp:
         self.processed_files = set()
         self.log_queue = queue.Queue()
         
+        self.base_config = self.load_config()
         # 检测环境（仅快速检测，不阻塞UI）
         self.python_exe = self.detect_python()
         self.pandoc_path = self.detect_pandoc()
-        self.base_config = self.load_config()
+        self.pdf_engine = self.detect_pdf_engine()
         self.apply_detected_paths()
         # 先使用默认值，异步检测完成后更新
         self.has_watermark = False
@@ -59,25 +59,59 @@ class MinerUtoMDApp:
         
     def detect_python(self):
         """检测 MinerU Python 环境"""
+        configured = (self.base_config or {}).get('mineru', {}).get('python_exe')
         paths = [
+            configured,
             r"D:\CDriveMoved\miniforge3\envs\mineru2\python.exe",
             r"D:\CDriveMoved\miniforge3\envs\mineru\python.exe",
         ]
         for p in paths:
-            if Path(p).exists():
+            if p and Path(p).exists():
                 return p
         return sys.executable
     
     def detect_pandoc(self):
         """检测 Pandoc"""
+        configured = (self.base_config or {}).get('pandoc', {}).get('path')
         paths = [
+            configured,
             r"D:\CDriveMoved\miniforge3\envs\mineru2\Library\bin\pandoc.exe",
             r"C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Packages\JohnMacFarlane.Pandoc_Microsoft.Winget.Source_8wekyb3d8bbwe\pandoc-3.9.0.2\pandoc.exe",
         ]
         for p in paths:
-            if Path(p).exists():
+            if p and Path(p).exists():
                 return p
+            if p:
+                import shutil
+                found = shutil.which(str(p))
+                if found:
+                    return found
         return "pandoc"
+
+    def detect_pdf_engine(self):
+        """检测 Pandoc PDF 引擎"""
+        configured = None
+        try:
+            configured = (self.base_config or {}).get('pandoc', {}).get('pdf_engine')
+        except AttributeError:
+            configured = None
+
+        candidates = []
+        if configured:
+            candidates.append(str(configured))
+        candidates.extend([
+            r"D:\CDriveMoved\miniforge3\envs\mineru2\Library\bin\wkhtmltopdf.exe",
+            "wkhtmltopdf",
+        ])
+
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return candidate
+            import shutil
+            found = shutil.which(candidate)
+            if found:
+                return found
+        return configured or "wkhtmltopdf"
 
     def app_dir(self):
         if getattr(sys, 'frozen', False):
@@ -115,6 +149,15 @@ class MinerUtoMDApp:
             mineru_cfg.setdefault('python_exe', self.python_exe)
         if self.pandoc_path:
             pandoc_cfg['path'] = self.pandoc_path
+        if self.pdf_engine:
+            pandoc_cfg['pdf_engine'] = self.pdf_engine
+
+        hf_home = mineru_cfg.get('hf_home')
+        hf_hub_cache = mineru_cfg.get('hf_hub_cache')
+        if hf_home:
+            os.environ.setdefault('HF_HOME', str(hf_home))
+        if hf_hub_cache:
+            os.environ.setdefault('HF_HUB_CACHE', str(hf_hub_cache))
     
     def _start_async_env_check(self):
         """后台异步检测环境，不阻塞UI启动"""
