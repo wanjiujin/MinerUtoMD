@@ -1,0 +1,39 @@
+presets:
+  local_fast:
+    name: "本地快速"
+    description: "使用本地模型缓存、pipeline 后端，适合日常可复制文本 PDF。"
+    mineru:
+      model_source: "local"
+      backend: "pipeline"
+      parse_method: "txt"
+      enable_formula: false
+      enable_table: false
+      device: "auto"
+  local_quality:
+    name: "本地高质量"
+    description: "使用本地模型缓存、自动解析、公式识别，适合论文和混排文档。"
+    mineru:
+      model_source: "local"
+      backend: "pipeline"
+      parse_method: "auto"
+      enable_formula: true
+      enable_table: true
+      device: "auto"
+  scanned_ocr:
+    name: "扫描件 OCR"
+    description: "强制 OCR，适合扫描件或图片型 PDF。"
+    mineru:
+      model_source: "local"
+      backend: "pipeline"
+      parse_method: "ocr"
+      enable_formula: false
+      enable_table: true
+      device: "auto"
+  offline_safe:
+    name: "离线稳定"
+    description: "完全依赖本地模型配置，避免运行时联网下载。"
+    mineru:
+      model_source: "local"
+      mineru_tools_config_json: "D:/Dmate工作区/MInerUtoMD/MinerUtoMD/mineru_local_models.json"
+      hf_home: "D:/CDriveMoved/hf_cache"
+      hf_hub_cache: "D:/CDriveMoved/hf_cache/hub"

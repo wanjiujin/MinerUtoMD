@@ -4,11 +4,19 @@ Pandoc 文档转换模块
 import os
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Windows 上隐藏子进程窗口
+if sys.platform == 'win32':
+    SUBPROCESS_FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+else:
+    SUBPROCESS_FLAGS = 0
+
 
 
 class PandocConverter:
@@ -36,28 +44,41 @@ class PandocConverter:
         self.config = config or {}
         self.pdf_engine = self.config.get('pdf_engine', 'wkhtmltopdf')
         self.word_template = self.config.get('word_template')
-        self.extra_args = self.config.get('extra_args', [])
+        self.extra_args = list(self.config.get('extra_args', []))
         
         # Pandoc 路径
         self.pandoc_path = self.config.get('pandoc_path', 'pandoc')
         if self.pandoc_path == 'pandoc':
             # 尝试查找 pandoc
             self.pandoc_path = shutil.which('pandoc') or 'pandoc'
+        elif not Path(self.pandoc_path).exists():
+            fallback = shutil.which('pandoc')
+            if fallback:
+                logger.warning(f"Pandoc配置路径不存在，已切换到PATH: {fallback}")
+                self.pandoc_path = fallback
     
     def check_installation(self) -> bool:
         """检查Pandoc是否正确安装"""
+        if self.pandoc_path == 'pandoc' and not shutil.which('pandoc'):
+            logger.error("Pandoc未安装或不在PATH，请安装Pandoc或在config.yaml中配置pandoc.path")
+            return False
+        if self.pandoc_path != 'pandoc' and not Path(self.pandoc_path).exists():
+            logger.error(f"Pandoc配置路径不存在: {self.pandoc_path}")
+            return False
+
         try:
             result = subprocess.run(
                 [self.pandoc_path, '--version'],
                 capture_output=True,
-                text=True
+                text=True,
+                creationflags=SUBPROCESS_FLAGS
             )
             if result.returncode == 0:
                 logger.info(f"Pandoc版本: {result.stdout.split()[1]}")
                 return True
             return False
-        except FileNotFoundError:
-            logger.error("Pandoc未安装，请从 https://pandoc.org/installing.html 下载安装")
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            logger.error(f"Pandoc不可用: {exc}")
             return False
     
     def convert(
@@ -132,7 +153,7 @@ class PandocConverter:
                     cmd.extend(['--reference-doc', self.word_template])
             
             # 额外参数
-            cmd.extend(self.extra_args)
+            cmd.extend(list(self.extra_args))
             
             # 自定义参数
             if 'extra_args' in kwargs:
@@ -147,7 +168,8 @@ class PandocConverter:
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                cwd=cwd
+                cwd=cwd,
+                creationflags=SUBPROCESS_FLAGS
             )
             
             if result.returncode != 0:
@@ -195,7 +217,7 @@ class PandocConverter:
         md_path = Path(md_path)
         output_path = Path(output_path)
         
-        extra_args = kwargs.get('extra_args', [])
+        extra_args = list(kwargs.get('extra_args', []))
         
         if template:
             extra_args.extend(['--reference-doc', template])
@@ -212,7 +234,7 @@ class PandocConverter:
         
         # 设置资源搜索路径
         if resource_paths:
-            extra_args.extend(['--resource-path', ':'.join(resource_paths)])
+            extra_args.extend(['--resource-path', os.pathsep.join(resource_paths)])
         
         kwargs['extra_args'] = extra_args
         
@@ -267,8 +289,10 @@ class PandocConverter:
     ) -> Dict[str, Any]:
         """Markdown转HTML"""
         if standalone:
-            kwargs['extra_args'] = kwargs.get('extra_args', [])
-            kwargs['extra_args'].append('--standalone')
+            extra_args = list(kwargs.get('extra_args', []))
+            if '--standalone' not in extra_args:
+                extra_args.append('--standalone')
+            kwargs['extra_args'] = extra_args
         
         return self.convert(
             md_path,

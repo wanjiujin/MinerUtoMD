@@ -2,15 +2,16 @@
 """测试完整工作流"""
 import os
 import sys
+from pathlib import Path
 
 # 设置环境变量
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 os.environ['HF_HOME'] = 'C:/hf_cache'
 
 # 添加项目路径
-sys.path.insert(0, r'D:\Dmate工作区\MInerUtoMD')
+sys.path.insert(0, str(Path(__file__).parent))
 
-from workflow import PDFWorkflow
+from doc_workflow import PDFWorkflow
 
 # 创建工作流
 workflow = PDFWorkflow({

@@ -7,6 +7,10 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
 # Windows 编码修复
 if sys.platform == 'win32':
     os.environ['PYTHONIOENCODING'] = 'utf-8'
@@ -28,13 +32,15 @@ import yaml
 
 # 支持直接运行和包导入
 try:
-    from .workflow import PDFWorkflow, WordWorkflow
+    from .doc_workflow import PDFWorkflow, WordWorkflow
     from .mineru_extractor import MinerUExtractor
     from .pandoc_converter import PandocConverter
+    from .environment_diagnostics import diagnose_environment, flatten_diagnostics
 except ImportError:
-    from workflow import PDFWorkflow, WordWorkflow
+    from doc_workflow import PDFWorkflow, WordWorkflow
     from mineru_extractor import MinerUExtractor
     from pandoc_converter import PandocConverter
+    from environment_diagnostics import diagnose_environment, flatten_diagnostics
 
 # 初始化Rich控制台 - 禁用 legacy_windows 模式避免编码问题
 console = Console(force_terminal=True, legacy_windows=False)
@@ -111,12 +117,51 @@ def check():
 
 
 @cli.command()
+@click.option('--json-output', is_flag=True, help='以JSON输出完整诊断信息')
+@click.pass_context
+def doctor(ctx, json_output):
+    """输出环境诊断报告"""
+    report = diagnose_environment(ctx.obj.get('config', {}))
+    if json_output:
+        import json
+        console.print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title="环境诊断")
+    table.add_column("项目", style="cyan")
+    table.add_column("状态", style="green")
+    table.add_column("详情", style="white")
+    for row in flatten_diagnostics(report):
+        table.add_row(row['name'], "OK" if row['ok'] else "FAIL", str(row.get('detail') or ""))
+    console.print(table)
+
+
+@cli.command()
+def presets():
+    """显示推荐配置预设"""
+    presets_path = Path(__file__).parent / 'config_presets.yaml'
+    if not presets_path.exists():
+        console.print("[red]未找到 config_presets.yaml[/red]")
+        return
+    with open(presets_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
+
+    table = Table(title="配置预设")
+    table.add_column("ID", style="cyan")
+    table.add_column("名称", style="green")
+    table.add_column("说明", style="white")
+    for preset_id, preset in (data.get('presets') or {}).items():
+        table.add_row(preset_id, str(preset.get('name', '')), str(preset.get('description', '')))
+    console.print(table)
+
+
+@cli.command()
 @click.argument('input_file', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='输出目录')
 @click.option('--format', '-f', 'formats', multiple=True, 
               type=click.Choice(['md', 'docx', 'pdf', 'epub', 'html']),
               default=['md'], help='输出格式（可多次指定）')
-@click.option('--formula', is_flag=True, default=True, help='启用公式识别')
+@click.option('--formula/--no-formula', default=True, help='启用或关闭公式识别')
 @click.option('--table', is_flag=True, default=False, help='启用表格识别')
 @click.option('--keep-temp', is_flag=True, help='保留中间文件')
 @click.pass_context
@@ -250,8 +295,9 @@ def word(ctx, input_file, output, md_only, keep_temp):
 @click.option('--format', '-f', 'formats', multiple=True,
               type=click.Choice(['md', 'docx', 'pdf', 'epub', 'html']),
               default=['md'], help='输出格式')
+@click.option('--resume', is_flag=True, help='根据 conversion_manifest.json 跳过已成功文件')
 @click.pass_context
-def batch_pdf(ctx, input_dir, output, formats):
+def batch_pdf(ctx, input_dir, output, formats, resume):
     """
     批量处理PDF文件
     
@@ -280,21 +326,31 @@ def batch_pdf(ctx, input_dir, output, formats):
     result = workflow.batch_run(
         input_dir,
         output,
-        list(formats)
+        list(formats),
+        resume=resume
     )
+    
+    if not result.get('success') and 'total' not in result:
+        console.print(f"\n[bold red]✗ 批量处理失败[/bold red]")
+        console.print(f"  {result.get('error', '未知错误')}", style="red")
+        return
     
     console.print(f"\n[bold]处理完成[/bold]")
     console.print(f"  总计: {result['total']}")
     console.print(f"  成功: [green]{result['success_count']}[/green]")
+    console.print(f"  跳过: [yellow]{result.get('skipped_count', 0)}[/yellow]")
     console.print(f"  失败: [red]{result['failed_count']}[/red]")
+    if result.get('manifest_path'):
+        console.print(f"  Manifest: {result['manifest_path']}")
 
 
 @cli.command()
 @click.argument('input_dir', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='输出目录')
 @click.option('--md-only', is_flag=True, help='只导出Markdown')
+@click.option('--resume', is_flag=True, help='根据 conversion_manifest.json 跳过已成功文件')
 @click.pass_context
-def batch_word(ctx, input_dir, output, md_only):
+def batch_word(ctx, input_dir, output, md_only, resume):
     """
     批量处理Word文件
     
@@ -323,13 +379,22 @@ def batch_word(ctx, input_dir, output, md_only):
     result = workflow.batch_run(
         input_dir,
         output,
-        export_md_only=md_only
+        export_md_only=md_only,
+        resume=resume
     )
+    
+    if not result.get('success') and 'total' not in result:
+        console.print(f"\n[bold red]✗ 批量处理失败[/bold red]")
+        console.print(f"  {result.get('error', '未知错误')}", style="red")
+        return
     
     console.print(f"\n[bold]处理完成[/bold]")
     console.print(f"  总计: {result['total']}")
     console.print(f"  成功: [green]{result['success_count']}[/green]")
+    console.print(f"  跳过: [yellow]{result.get('skipped_count', 0)}[/yellow]")
     console.print(f"  失败: [red]{result['failed_count']}[/red]")
+    if result.get('manifest_path'):
+        console.print(f"  Manifest: {result['manifest_path']}")
 
 
 @cli.command()

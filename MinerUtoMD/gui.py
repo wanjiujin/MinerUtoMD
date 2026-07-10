@@ -11,9 +11,16 @@ import os
 from datetime import datetime
 import logging
 
+# Windows 上隐藏子进程窗口
+if sys.platform == 'win32':
+    SUBPROCESS_FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+else:
+    SUBPROCESS_FLAGS = 0
+
+
 # 设置环境变量（解决 HuggingFace 访问和 Windows 路径长度问题）
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-os.environ['HF_HOME'] = 'C:/hf_cache'
+os.environ['HF_HOME'] = 'D:/CDriveMoved/hf_cache'
 
 # 样式配置
 COLORS = {
@@ -100,9 +107,11 @@ class CardFrame(tk.Frame):
 
 
 class MinerUtoMDGUI:
+    VERSION = "1.1.0"
+    
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("MinerUtoMD - 文档转换工具")
+        self.root.title(f"MinerUtoMD v{self.VERSION} - 文档转换工具")
         self.root.geometry("900x700")
         self.root.configure(bg=COLORS['bg_primary'])
         self.root.resizable(True, True)
@@ -116,6 +125,8 @@ class MinerUtoMDGUI:
         # 检测环境
         self.python_exe = self.detect_python_exe()
         self.pandoc_path = self.detect_pandoc()
+        self.has_watermark_deps = self.check_watermark_dependencies()
+        self.gpu_info = self.detect_gpu()
         
         self.setup_ui()
         self.center_window()
@@ -123,12 +134,12 @@ class MinerUtoMDGUI:
     def detect_python_exe(self):
         """检测 Python 可执行文件"""
         # 优先使用新版 MinerU 环境 (支持公式识别)
-        mineru2_python = r"C:\ProgramData\miniforge3\envs\mineru2\python.exe"
+        mineru2_python = r"D:\CDriveMoved\miniforge3\envs\mineru2\python.exe"
         if Path(mineru2_python).exists():
             return mineru2_python
         
         # 旧版环境
-        conda_python = r"C:\ProgramData\miniforge3\envs\mineru\python.exe"
+        conda_python = r"D:\CDriveMoved\miniforge3\envs\mineru\python.exe"
         if Path(conda_python).exists():
             return conda_python
         
@@ -141,6 +152,81 @@ class MinerUtoMDGUI:
         if Path(pandoc_path).exists():
             return pandoc_path
         return "pandoc"
+    
+    def check_watermark_dependencies(self):
+        """检测水印去除所需的依赖"""
+        deps = {'cv2': False, 'fitz': False}
+        
+        try:
+            import cv2
+            deps['cv2'] = True
+        except ImportError:
+            pass
+        
+        try:
+            import fitz  # PyMuPDF
+            deps['fitz'] = True
+        except ImportError:
+            pass
+        
+        return deps['cv2'] and deps['fitz']
+    
+    def detect_gpu(self):
+        """检测 GPU 可用性，使用多种方案"""
+        info = {'has_cuda': False, 'device_name': None, 'vram_mb': None, 'error': None}
+        
+        # 方案1: 通过 torch 检测（使用 mineru2 环境）
+        try:
+            r = subprocess.run(
+                [self.python_exe, "-c",
+                 "import torch; "
+                 "print(torch.cuda.is_available()); "
+                 "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else ''); "
+                  "print(int(torch.cuda.get_device_properties(0).total_memory/1024/1024) if torch.cuda.is_available() else 0); "
+                 "print(torch.version.cuda or '')"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=SUBPROCESS_FLAGS
+            )
+            if r.returncode == 0:
+                lines = r.stdout.strip().split('\n')
+                if len(lines) >= 3 and lines[0].strip() == 'True':
+                    info['has_cuda'] = True
+                    info['device_name'] = lines[1].strip() or None
+                    try:
+                        info['vram_mb'] = int(lines[2].strip()) or None
+                    except ValueError:
+                        pass
+                    return info
+                info['error'] = f"torch.cuda.is_available()={lines[0].strip() if lines else 'unknown'}"
+            else:
+                info['error'] = f"torch 检测失败: rc={r.returncode}"
+                if r.stderr:
+                    info['error'] += f", stderr={r.stderr[:200]}"
+        except Exception as e:
+            info['error'] = f"torch 检测异常: {str(e)}"
+        
+        # 方案2: nvidia-smi 备选
+        try:
+            r = subprocess.run(
+                ['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                capture_output=True, text=True, timeout=10,
+                creationflags=SUBPROCESS_FLAGS
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                line = r.stdout.strip().split('\n')[0]
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) >= 2:
+                    info['device_name'] = parts[0]
+                    mem_str = parts[1].replace('MiB', '').replace('MB', '').strip()
+                    try:
+                        info['vram_mb'] = int(mem_str)
+                    except ValueError:
+                        pass
+                    info['error'] = (info['error'] or "") + "; nvidia-smi 正常，PyTorch 可能缺少 CUDA 支持"
+        except Exception:
+            pass
+        
+        return info
     
     def setup_ui(self):
         """设置界面"""
@@ -259,6 +345,17 @@ class MinerUtoMDGUI:
                                   command=self.toggle_file_mode)
         batch_rb.pack(side='left', padx=(20, 0))
         
+        # 子文件夹选项（批量模式）
+        self.subfolder_var = tk.BooleanVar(value=False)
+        self.subfolder_cb = tk.Checkbutton(single_frame, 
+                                    text="包含子文件夹",
+                                    variable=self.subfolder_var,
+                                    font=('Microsoft YaHei UI', 10),
+                                    bg=COLORS['bg_card'], fg=COLORS['text_primary'],
+                                    selectcolor=COLORS['bg_secondary'],
+                                    activebackground=COLORS['bg_card'])
+        self.subfolder_cb.pack(side='left', padx=(20, 0))
+        
         # 文件路径输入
         path_frame = tk.Frame(file_frame, bg=COLORS['bg_card'])
         path_frame.pack(fill='x', padx=20, pady=(0, 15))
@@ -276,6 +373,13 @@ class MinerUtoMDGUI:
                                        width=100, height=35,
                                        bg_color=COLORS['bg_secondary'])
         self.browse_btn.pack(side='right')
+        
+        # 文件统计显示
+        self.file_count_var = tk.StringVar(value="")
+        file_count_label = tk.Label(file_frame, textvariable=self.file_count_var,
+                                   font=('Microsoft YaHei UI', 10),
+                                   bg=COLORS['bg_card'], fg=COLORS['text_secondary'])
+        file_count_label.pack(fill='x', padx=20, pady=(0, 10))
     
     def setup_output_settings(self, parent):
         """设置输出选项"""
@@ -344,6 +448,50 @@ class MinerUtoMDGUI:
                                     activebackground=COLORS['bg_card'])
         md_only_cb.pack(side='left')
         
+        # PDF 工作流选项 - 设备选择
+        self.pdf_device_frame = tk.Frame(output_frame, bg=COLORS['bg_card'])
+        self.pdf_device_frame.pack(fill='x', padx=20, pady=(0, 5))
+        
+        device_label = tk.Label(self.pdf_device_frame, text="设备:", 
+                               font=('Microsoft YaHei UI', 10),
+                               bg=COLORS['bg_card'], fg=COLORS['text_secondary'])
+        device_label.pack(side='left')
+        
+        self.device_var = tk.StringVar(value="auto")
+        
+        auto_rb = tk.Radiobutton(self.pdf_device_frame, text="自动", variable=self.device_var,
+                                value="auto", font=('Microsoft YaHei UI', 10),
+                                bg=COLORS['bg_card'], fg=COLORS['text_primary'],
+                                selectcolor=COLORS['bg_secondary'],
+                                activebackground=COLORS['bg_card'])
+        auto_rb.pack(side='left', padx=(5, 0))
+        
+        gpu_text = "GPU"
+        if self.gpu_info['has_cuda']:
+            name = self.gpu_info.get('device_name', '')
+            vram = self.gpu_info.get('vram_mb')
+            if name:
+                vram_str = f" {vram}MB" if vram else ""
+                gpu_text = f"GPU ({name}{vram_str})"
+        else:
+            gpu_text = "GPU (不可用)"
+        
+        gpu_rb = tk.Radiobutton(self.pdf_device_frame, text=gpu_text, variable=self.device_var,
+                               value="cuda", font=('Microsoft YaHei UI', 10),
+                               bg=COLORS['bg_card'], 
+                               fg=COLORS['text_primary'] if self.gpu_info['has_cuda'] else COLORS['text_secondary'],
+                               selectcolor=COLORS['bg_secondary'],
+                               activebackground=COLORS['bg_card'],
+                               state='normal' if self.gpu_info['has_cuda'] else 'disabled')
+        gpu_rb.pack(side='left', padx=(10, 0))
+        
+        cpu_rb = tk.Radiobutton(self.pdf_device_frame, text="CPU", variable=self.device_var,
+                               value="cpu", font=('Microsoft YaHei UI', 10),
+                               bg=COLORS['bg_card'], fg=COLORS['text_primary'],
+                               selectcolor=COLORS['bg_secondary'],
+                               activebackground=COLORS['bg_card'])
+        cpu_rb.pack(side='left', padx=(10, 0))
+        
         # PDF 工作流选项 - 公式和表格识别
         self.pdf_options_frame = tk.Frame(output_frame, bg=COLORS['bg_card'])
         self.pdf_options_frame.pack(fill='x', padx=20, pady=(0, 15))
@@ -369,6 +517,46 @@ class MinerUtoMDGUI:
                                   selectcolor=COLORS['bg_secondary'],
                                   activebackground=COLORS['bg_card'])
         table_cb.pack(side='left', padx=(20, 0))
+        
+        # 水印去除（可选功能，需要 OpenCV 和 PyMuPDF）
+        self.watermark_var = tk.BooleanVar(value=False)
+        watermark_text = "水印去除" if self.has_watermark_deps else "水印去除 (需安装opencv-python和pymupdf)"
+        watermark_cb = tk.Checkbutton(self.pdf_options_frame, 
+                                      text=watermark_text,
+                                      variable=self.watermark_var,
+                                      font=('Microsoft YaHei UI', 10),
+                                      bg=COLORS['bg_card'], 
+                                      fg=COLORS['text_primary'] if self.has_watermark_deps else COLORS['text_secondary'],
+                                      selectcolor=COLORS['bg_secondary'],
+                                      activebackground=COLORS['bg_card'],
+                                      state='normal' if self.has_watermark_deps else 'disabled')
+        watermark_cb.pack(side='left', padx=(20, 0))
+        
+        # 水印去除模式选择
+        self.watermark_mode_var = tk.StringVar(value="fast")
+        self.watermark_mode_fast = tk.Radiobutton(self.pdf_options_frame, 
+                                                  text="快速",
+                                                  variable=self.watermark_mode_var, 
+                                                  value="fast",
+                                                  font=('Microsoft YaHei UI', 9),
+                                                  bg=COLORS['bg_card'], 
+                                                  fg=COLORS['text_secondary'],
+                                                  selectcolor=COLORS['bg_secondary'],
+                                                  activebackground=COLORS['bg_card'],
+                                                  state='normal' if self.has_watermark_deps else 'disabled')
+        self.watermark_mode_fast.pack(side='left', padx=(5, 0))
+        
+        self.watermark_mode_deep = tk.Radiobutton(self.pdf_options_frame, 
+                                                  text="深度",
+                                                  variable=self.watermark_mode_var, 
+                                                  value="deep",
+                                                  font=('Microsoft YaHei UI', 9),
+                                                  bg=COLORS['bg_card'], 
+                                                  fg=COLORS['text_secondary'],
+                                                  selectcolor=COLORS['bg_secondary'],
+                                                  activebackground=COLORS['bg_card'],
+                                                  state='normal' if self.has_watermark_deps else 'disabled')
+        self.watermark_mode_deep.pack(side='left', padx=(5, 0))
     
     def setup_progress_area(self, parent):
         """设置进度显示区域"""
@@ -407,23 +595,49 @@ class MinerUtoMDGUI:
         # 开始转换按钮
         self.convert_btn = ModernButton(button_frame, "开始转换",
                                         command=self.start_conversion,
-                                        width=200, height=50,
+                                        width=150, height=50,
                                         bg_color=COLORS['accent'])
-        self.convert_btn.pack(side='left', padx=(0, 15))
+        self.convert_btn.pack(side='left', padx=(0, 10))
+        
+        # 暂停/继续按钮
+        self.pause_btn = ModernButton(button_frame, "暂停",
+                                      command=self.toggle_pause,
+                                      width=100, height=50,
+                                      bg_color='#f0ad4e')
+        self.pause_btn.pack(side='left', padx=(0, 10))
+        
+        # 刷新按钮
+        refresh_btn = ModernButton(button_frame, "刷新",
+                                   command=self.refresh_file_list,
+                                   width=80, height=50,
+                                   bg_color=COLORS['bg_secondary'])
+        refresh_btn.pack(side='left', padx=(0, 10))
+        
+        # 断点续传按钮
+        resume_btn = ModernButton(button_frame, "断点续传",
+                                  command=self.resume_conversion,
+                                  width=120, height=50,
+                                  bg_color='#5bc0de')
+        resume_btn.pack(side='left', padx=(0, 10))
         
         # 打开输出目录按钮
         open_output_btn = ModernButton(button_frame, "打开输出目录",
                                        command=self.open_output_dir,
-                                       width=150, height=50,
+                                       width=130, height=50,
                                        bg_color=COLORS['bg_secondary'])
-        open_output_btn.pack(side='left', padx=(0, 15))
+        open_output_btn.pack(side='left', padx=(0, 10))
         
         # 检查环境按钮
         check_btn = ModernButton(button_frame, "检查环境",
                                 command=self.check_environment,
-                                width=120, height=50,
+                                width=100, height=50,
                                 bg_color=COLORS['bg_secondary'])
         check_btn.pack(side='left')
+        
+        # 初始化状态变量
+        self.is_paused = False
+        self.is_running = False
+        self.processed_files = set()  # 已处理的文件
     
     def setup_status_bar(self):
         """设置状态栏"""
@@ -456,7 +670,7 @@ class MinerUtoMDGUI:
     
     def toggle_file_mode(self):
         """切换文件模式"""
-        pass  # 可以添加更多逻辑
+        self.file_count_var.set("")
     
     def browse_file(self):
         """浏览文件"""
@@ -476,6 +690,98 @@ class MinerUtoMDGUI:
             dirpath = filedialog.askdirectory()
             if dirpath:
                 self.file_path_var.set(dirpath)
+                self.refresh_file_list()
+    
+    def refresh_file_list(self):
+        """刷新文件列表并显示数量"""
+        mode = self.file_mode_var.get()
+        if mode != "batch":
+            return
+        
+        input_path = self.file_path_var.get()
+        if not input_path:
+            return
+        
+        input_path = Path(input_path)
+        if not input_path.exists():
+            return
+        
+        workflow = self.workflow_var.get()
+        if workflow == "pdf":
+            ext = "*.pdf"
+        else:
+            ext = "*.docx"
+        
+        # 根据是否包含子文件夹选择扫描方式
+        if self.subfolder_var.get():
+            files = list(input_path.rglob(ext))
+            files += list(input_path.rglob(ext.upper()))
+        else:
+            files = list(input_path.glob(ext))
+            files += list(input_path.glob(ext.upper()))
+        
+        # 去重（Windows不区分大小写，但保留原始路径大小写）
+        seen = set()
+        unique_files = []
+        for f in files:
+            key = str(f).lower()
+            if key not in seen:
+                seen.add(key)
+                unique_files.append(f)
+        files = unique_files
+        
+        self.file_count_var.set(f"找到 {len(files)} 个文件")
+        self.log(f"扫描完成: 找到 {len(files)} 个文件\n", 'info')
+    
+    def toggle_pause(self):
+        """暂停/继续"""
+        if not self.is_running:
+            return
+        
+        self.is_paused = not self.is_paused
+        if self.is_paused:
+            self.pause_btn.config(text="继续")
+            self.log("处理已暂停\n", 'warning')
+            self.status_var.set("已暂停")
+        else:
+            self.pause_btn.config(text="暂停")
+            self.log("继续处理...\n", 'info')
+            self.status_var.set("处理中...")
+    
+    def resume_conversion(self):
+        """断点续传"""
+        if self.is_running:
+            messagebox.showwarning("提示", "当前有任务正在运行")
+            return
+        
+        mode = self.file_mode_var.get()
+        if mode != "batch":
+            messagebox.showwarning("提示", "断点续传仅支持批量处理模式")
+            return
+        
+        output_dir = Path(self.output_dir_var.get())
+        if not output_dir.exists():
+            messagebox.showwarning("提示", "输出目录不存在")
+            return
+        
+        # 扫描已处理的文件
+        self.processed_files = set()
+        for item in output_dir.iterdir():
+            if item.is_dir():
+                # 检查是否有输出文件
+                has_output = False
+                for ext in ['*.md', '*.docx', '*.pdf']:
+                    if list(item.glob(ext)):
+                        has_output = True
+                        break
+                if has_output:
+                    self.processed_files.add(item.name.lower())
+        
+        self.log(f"已找到 {len(self.processed_files)} 个已处理的文件\n", 'info')
+        self.log("点击\"开始转换\"继续处理剩余文件\n", 'info')
+        
+        # 开始转换
+        self.start_conversion(resume=True)
     
     def browse_output_dir(self):
         """选择输出目录"""
@@ -502,7 +808,8 @@ class MinerUtoMDGUI:
         # 检查 Pandoc
         try:
             result = subprocess.run([self.pandoc_path, "--version"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True,
+                                   creationflags=SUBPROCESS_FLAGS)
             if result.returncode == 0:
                 version = result.stdout.split('\n')[0]
                 self.log(f"Pandoc: {version}\n", 'success')
@@ -515,12 +822,14 @@ class MinerUtoMDGUI:
         try:
             # 先检查新版 MinerU 3.x
             result = subprocess.run([self.python_exe, "-c", "import mineru; print('mineru 3.x')"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True,
+                                   creationflags=SUBPROCESS_FLAGS)
             if result.returncode == 0 and 'mineru' in result.stdout:
                 # 获取详细版本
                 version_result = subprocess.run(
-                    [r"C:\ProgramData\miniforge3\envs\mineru2\Scripts\mineru.exe", "--version"],
-                    capture_output=True, text=True
+                    [r"D:\CDriveMoved\miniforge3\envs\mineru2\Scripts\mineru.exe", "--version"],
+                    capture_output=True, text=True,
+                    creationflags=SUBPROCESS_FLAGS
                 )
                 if version_result.returncode == 0:
                     self.log(f"MinerU: {version_result.stdout.strip()} (支持公式识别)\n", 'success')
@@ -529,7 +838,8 @@ class MinerUtoMDGUI:
             else:
                 # 检查旧版 magic-pdf
                 result = subprocess.run([self.python_exe, "-m", "magic_pdf.cli", "--version"],
-                                       capture_output=True, text=True)
+                                       capture_output=True, text=True,
+                                       creationflags=SUBPROCESS_FLAGS)
                 if result.returncode == 0:
                     self.log(f"MinerU: {result.stdout.strip()} (旧版，不支持公式识别)\n", 'warning')
                 else:
@@ -537,22 +847,93 @@ class MinerUtoMDGUI:
         except Exception as e:
             self.log(f"MinerU: 检查失败 - {e}\n", 'warning')
         
-        # 检查 PyTorch
+        # 检查 PyTorch 和 GPU
         try:
             result = subprocess.run([self.python_exe, "-c",
                                     "import torch; print(f'{torch.__version__},{torch.cuda.is_available()}')"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True,
+                                   creationflags=SUBPROCESS_FLAGS)
             if result.returncode == 0:
                 version, cuda = result.stdout.strip().split(',')
                 cuda_status = "CUDA已启用" if cuda == "True" else "仅CPU"
                 self.log(f"PyTorch: {version} ({cuda_status})\n", 'success')
+                # 显示 GPU 详情
+                if cuda == "True" and self.gpu_info.get('device_name'):
+                    name = self.gpu_info['device_name']
+                    vram = self.gpu_info.get('vram_mb')
+                    vram_str = f", {vram}MB" if vram else ""
+                    self.log(f"GPU: {name}{vram_str}\n", 'success')
+                elif cuda != "True" and self.gpu_info.get('device_name'):
+                    # nvidia-smi 能工作但 PyTorch 缺少 CUDA 支持
+                    name = self.gpu_info['device_name']
+                    vram = self.gpu_info.get('vram_mb')
+                    vram_str = f", {vram}MB" if vram else ""
+                    self.log(f"GPU: {name}{vram_str} (驱动正常，但PyTorch未启用CUDA)\n", 'warning')
+                    error = self.gpu_info.get('error')
+                    if error:
+                        self.log(f"  原因: {error}\n", 'warning')
+                elif cuda != "True":
+                    error = self.gpu_info.get('error')
+                    if error:
+                        self.log(f"GPU: 不可用 ({error})\n", 'warning')
+                    else:
+                        self.log("GPU: 不可用 (将使用CPU模式)\n", 'warning')
+            else:
+                error = self.gpu_info.get('error')
+                if error:
+                    self.log(f"GPU: 检测失败 ({error})\n", 'warning')
+                else:
+                    self.log("GPU: 检测失败 (将使用CPU模式)\n", 'warning')
         except Exception as e:
             self.log(f"PyTorch: 检查失败 - {e}\n", 'warning')
+            error = self.gpu_info.get('error')
+            if error:
+                self.log(f"GPU: 检测失败 ({error})\n", 'warning')
+            else:
+                self.log("GPU: 检测失败 (将使用CPU模式)\n", 'warning')
+        
+        # 检查水印去除依赖
+        self.log("\n可选功能:\n", 'info')
+        
+        # OpenCV
+        try:
+            result = subprocess.run([self.python_exe, "-c", "import cv2; print(cv2.__version__)"],
+                                   capture_output=True, text=True,
+                                   creationflags=SUBPROCESS_FLAGS)
+            if result.returncode == 0:
+                self.log(f"OpenCV: {result.stdout.strip()} ✓\n", 'success')
+            else:
+                self.log("OpenCV: 未安装 (水印去除功能不可用)\n", 'warning')
+        except Exception as e:
+            self.log(f"OpenCV: 未安装\n", 'warning')
+        
+        # PyMuPDF
+        try:
+            result = subprocess.run([self.python_exe, "-c", "import fitz; print('ok')"],
+                                   capture_output=True, text=True,
+                                   creationflags=SUBPROCESS_FLAGS)
+            if result.returncode == 0 and 'ok' in result.stdout:
+                # 获取版本
+                ver_result = subprocess.run([self.python_exe, "-c", "import fitz; print(fitz.VersionBind)"],
+                                           capture_output=True, text=True,
+                                           creationflags=SUBPROCESS_FLAGS)
+                version = ver_result.stdout.strip() if ver_result.returncode == 0 else "已安装"
+                self.log(f"PyMuPDF: {version} ✓\n", 'success')
+            else:
+                self.log("PyMuPDF: 未安装 (水印去除功能不可用)\n", 'warning')
+        except Exception as e:
+            self.log(f"PyMuPDF: 未安装\n", 'warning')
+        
+        # 水印去除功能状态
+        if self.has_watermark_deps:
+            self.log("水印去除: 可用 (快速/深度两种模式)\n", 'success')
+        else:
+            self.log("水印去除: 不可用 (需安装 opencv-python 和 pymupdf)\n", 'warning')
         
         self.log("\n环境检查完成！\n", 'info')
     
     def log(self, message, level='info'):
-        """添加日志"""
+        """添加日志（线程安全）"""
         timestamp = datetime.now().strftime('%H:%M:%S')
         
         colors = {
@@ -562,44 +943,70 @@ class MinerUtoMDGUI:
             'error': COLORS['error'],
         }
         
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}")
-        self.log_text.see(tk.END)
+        # 使用 after 确保在主线程更新 GUI
+        def update_log():
+            self.log_text.insert(tk.END, f"[{timestamp}] {message}")
+            self.log_text.see(tk.END)
+        
+        self.root.after(0, update_log)
     
-    def start_conversion(self):
+    def start_conversion(self, resume=False):
         """开始转换"""
         # 获取参数
         file_path = self.file_path_var.get()
+        
         if not file_path:
             messagebox.showwarning("警告", "请选择文件或目录")
             return
         
         # 获取选中的格式
         formats = [fmt for fmt, var in self.format_vars.items() if var.get()]
+        
         if not formats:
             messagebox.showwarning("警告", "请至少选择一种输出格式")
             return
         
-        # 清空日志
-        self.log_text.delete(1.0, tk.END)
+        # 清空日志（非断点续传模式）
+        if not resume:
+            self.log_text.delete(1.0, tk.END)
+            self.processed_files = set()
+        
         self.progress_var.set(0)
+        self.is_running = True
+        self.is_paused = False
+        self.pause_btn.config(text="暂停")
+        
+        # 记录启动信息
+        self.log("正在启动转换任务...\n", 'info')
+        self.log(f"文件路径: {file_path}\n", 'info')
+        self.log(f"输出格式: {formats}\n", 'info')
         
         # 在新线程中执行
-        thread = threading.Thread(target=self.run_conversion,
-                                  args=(file_path, formats))
-        thread.daemon = True
-        thread.start()
+        try:
+            thread = threading.Thread(target=self.run_conversion,
+                                      args=(file_path, formats, resume))
+            thread.daemon = True
+            thread.start()
+        except Exception as e:
+            self.log(f"启动线程失败: {str(e)}\n", 'error')
+            import traceback
+            self.log(traceback.format_exc(), 'error')
     
-    def run_conversion(self, file_path, formats):
+    def run_conversion(self, file_path, formats, resume=False):
         """执行转换"""
         try:
-            self.status_var.set("正在处理...")
+            self.root.after(0, lambda: self.status_var.set("正在处理..."))
             self.log("开始处理...\n", 'info')
             
             workflow_type = self.workflow_var.get()
             mode = self.file_mode_var.get()
             output_dir = self.output_dir_var.get()
             
+            self.log(f"工作流类型: {workflow_type}\n", 'info')
+            self.log(f"处理模式: {mode}\n", 'info')
+            
             # 加载配置
+            self.log("加载配置文件...\n", 'info')
             config = self.load_config()
             
             # 更新 MinerU 配置
@@ -607,11 +1014,17 @@ class MinerUtoMDGUI:
                 config['mineru'] = {}
             config['mineru']['enable_formula'] = self.formula_var.get()
             config['mineru']['enable_table'] = self.table_var.get()
+            config['mineru']['device'] = self.device_var.get()
             
             # 设置 Pandoc 路径
             if 'pandoc' not in config:
                 config['pandoc'] = {}
             config['pandoc']['path'] = self.pandoc_path
+            
+            # 设置水印去除配置
+            if 'watermark_remover' not in config:
+                config['watermark_remover'] = {}
+            config['watermark_remover']['mode'] = self.watermark_mode_var.get()
             
             self.log(f"输入: {file_path}\n", 'info')
             self.log(f"输出: {output_dir}\n", 'info')
@@ -619,45 +1032,181 @@ class MinerUtoMDGUI:
             if workflow_type == "pdf":
                 self.log(f"公式识别: {'是' if self.formula_var.get() else '否'}\n", 'info')
                 self.log(f"表格识别: {'是' if self.table_var.get() else '否'}\n", 'info')
+                if self.watermark_var.get():
+                    self.log(f"水印去除: 是 ({self.watermark_mode_var.get()}模式)\n", 'info')
+                else:
+                    self.log(f"水印去除: 否\n", 'info')
             self.log("\n", 'info')
             
             # 导入工作流模块
+            self.log("导入工作流模块...\n", 'info')
             try:
-                from workflow import PDFWorkflow, WordWorkflow
-            except ImportError:
+                from doc_workflow import PDFWorkflow, WordWorkflow
+                self.log("工作流模块导入成功\n", 'success')
+            except ImportError as e:
                 # 打包后的路径
                 import sys
                 if getattr(sys, 'frozen', False):
                     bundle_dir = Path(sys._MEIPASS)
                     sys.path.insert(0, str(bundle_dir))
-                from workflow import PDFWorkflow, WordWorkflow
+                from doc_workflow import PDFWorkflow, WordWorkflow
+                self.log("工作流模块导入成功 (打包模式)\n", 'success')
             
             if mode == "batch":
                 if workflow_type == "pdf":
                     self.log("批量PDF处理...\n", 'info')
                     workflow = PDFWorkflow(config)
-                    result = workflow.batch_run(file_path, output_dir, formats)
+                    self.log(f"开始批量处理，输入目录: {file_path}\n", 'info')
+                    self.log(f"输出目录: {output_dir}\n", 'info')
+                    self.log(f"输出格式: {formats}\n", 'info')
+                    try:
+                        # 检查输入目录
+                        input_path = Path(file_path)
+                        if not input_path.exists():
+                            self.log(f"错误: 输入目录不存在\n", 'error')
+                            return
+                        
+                        # 根据是否包含子文件夹选择扫描方式
+                        if self.subfolder_var.get():
+                            pdf_files = list(input_path.rglob('*.pdf')) + list(input_path.rglob('*.PDF'))
+                        else:
+                            pdf_files = list(input_path.glob('*.pdf')) + list(input_path.glob('*.PDF'))
+                        
+                        # 去重（Windows不区分大小写，但保留原始路径大小写）
+                        seen = set()
+                        unique_files = []
+                        for f in pdf_files:
+                            key = str(f).lower()
+                            if key not in seen:
+                                seen.add(key)
+                                unique_files.append(f)
+                        pdf_files = unique_files
+                        
+                        total_files = len(pdf_files)
+                        self.log(f"找到 {total_files} 个PDF文件\n", 'info')
+                        
+                        # 断点续传：过滤已处理的文件
+                        if resume and self.processed_files:
+                            original_count = len(pdf_files)
+                            pdf_files = [f for f in pdf_files if f.stem.lower() not in self.processed_files]
+                            skipped = original_count - len(pdf_files)
+                            self.log(f"跳过已处理的 {skipped} 个文件\n", 'info')
+                        
+                        if not pdf_files:
+                            self.log(f"没有需要处理的文件\n", 'warning')
+                            return
+                        
+                        # 处理每个文件
+                        success_count = 0
+                        failed_count = 0
+                        skipped_count = len(self.processed_files) if resume else 0
+                        start_time = datetime.now()
+                        
+                        for i, pdf_file in enumerate(pdf_files, 1):
+                            # 检查暂停
+                            while self.is_paused:
+                                self.root.update()
+                                import time
+                                time.sleep(0.1)
+                            
+                            if not self.is_running:
+                                self.log(f"\n处理已中断\n", 'warning')
+                                break
+                            
+                            file_start_time = datetime.now()
+                            self.log(f"\n[{i}/{len(pdf_files)}] 处理: {pdf_file.name}\n", 'info')
+                            
+                            # 更新进度
+                            progress = (i / len(pdf_files)) * 100
+                            self.progress_var.set(progress)
+                            
+                            # 为每个文件创建单独的输出目录
+                            file_output_dir = Path(output_dir) / pdf_file.stem
+                            file_output_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            try:
+                                result = workflow.run(
+                                    str(pdf_file),
+                                    str(file_output_dir),
+                                    formats,
+                                    enable_formula=self.formula_var.get(),
+                                    enable_table=self.table_var.get(),
+                                    remove_watermark=self.watermark_var.get()
+                                )
+                                
+                                # 计算处理时间
+                                file_time = (datetime.now() - file_start_time).total_seconds()
+                                
+                                if result.get('success'):
+                                    success_count += 1
+                                    self.processed_files.add(pdf_file.stem.lower())
+                                    self.log(f"  ✓ 成功 ({file_time:.1f}秒)\n", 'success')
+                                    for fmt, path in result.get('outputs', {}).items():
+                                        self.log(f"    {fmt.upper()}: {path}\n", 'success')
+                                else:
+                                    failed_count += 1
+                                    self.log(f"  ✗ 失败 ({file_time:.1f}秒)\n", 'error')
+                                    for error in result.get('errors', []):
+                                        # 截断错误信息
+                                        if len(error) > 200:
+                                            error = error[:200] + "..."
+                                        self.log(f"    错误: {error}\n", 'error')
+                            except Exception as e:
+                                failed_count += 1
+                                file_time = (datetime.now() - file_start_time).total_seconds()
+                                self.log(f"  ✗ 异常 ({file_time:.1f}秒): {str(e)}\n", 'error')
+                            
+                            # 显示总耗时
+                            elapsed = (datetime.now() - start_time).total_seconds()
+                            avg_time = elapsed / i
+                            remaining = avg_time * (len(pdf_files) - i)
+                            self.status_var.set(f"处理中... 已用时 {elapsed:.0f}秒，预计剩余 {remaining:.0f}秒")
+                        
+                        # 显示结果
+                        total_time = (datetime.now() - start_time).total_seconds()
+                        self.progress_var.set(100)
+                        self.log(f"\n批量处理完成！\n", 'success')
+                        self.log(f"总计: {total_files}\n", 'info')
+                        if skipped_count > 0:
+                            self.log(f"跳过: {skipped_count}\n", 'info')
+                        self.log(f"成功: {success_count}\n", 'success')
+                        self.log(f"失败: {failed_count}\n", 'error' if failed_count > 0 else 'info')
+                        self.log(f"总耗时: {total_time:.1f}秒\n", 'info')
+                        self.status_var.set("转换完成")
+                        messagebox.showinfo("完成", f"批量处理完成！\n成功: {success_count}, 失败: {failed_count}\n总耗时: {total_time:.1f}秒")
+                        return
+                        
+                    except Exception as e:
+                        self.log(f"批量处理异常: {str(e)}\n", 'error')
+                        import traceback
+                        self.log(traceback.format_exc(), 'error')
+                        return
                 else:
                     self.log("批量Word处理...\n", 'info')
                     workflow = WordWorkflow(config)
                     result = workflow.batch_run(
-                        file_path, output_dir, 
+                        file_path,
+                        output_dir,
                         export_md_only=self.md_only_var.get()
                     )
-                
-                if result.get('success'):
-                    self.progress_var.set(100)
-                    self.log(f"\n处理完成！\n", 'success')
-                    self.log(f"总计: {result['total']}\n", 'info')
-                    self.log(f"成功: {result['success_count']}\n", 'success')
-                    self.log(f"失败: {result['failed_count']}\n", 
-                            'error' if result['failed_count'] > 0 else 'info')
-                    self.status_var.set("转换完成")
-                    messagebox.showinfo("成功", f"批量处理完成！\n成功: {result['success_count']}, 失败: {result['failed_count']}")
-                else:
-                    self.log(f"\n处理失败: {result.get('error', '未知错误')}\n", 'error')
-                    self.status_var.set("转换失败")
-                    messagebox.showerror("错误", f"处理失败: {result.get('error', '未知错误')}")
+                    if result.get('success'):
+                        self.progress_var.set(100)
+                        self.log(f"\n批量Word处理完成！\n", 'success')
+                        self.log(f"总计: {result.get('total', 0)}\n", 'info')
+                        self.log(f"成功: {result.get('success_count', 0)}\n", 'success')
+                        failed_count = result.get('failed_count', 0)
+                        self.log(f"失败: {failed_count}\n", 'error' if failed_count else 'info')
+                        self.status_var.set("转换完成")
+                        messagebox.showinfo(
+                            "完成",
+                            f"批量Word处理完成！\n成功: {result.get('success_count', 0)}, 失败: {failed_count}"
+                        )
+                    else:
+                        self.log(f"Word批量处理失败: {result.get('error', '未知错误')}\n", 'error')
+                        self.status_var.set("转换失败")
+                        messagebox.showerror("错误", "Word批量处理失败，请查看日志")
+                    return
+            
             else:
                 # 单文件处理
                 if workflow_type == "pdf":
@@ -666,7 +1215,8 @@ class MinerUtoMDGUI:
                     result = workflow.run(
                         file_path, output_dir, formats,
                         enable_formula=self.formula_var.get(),
-                        enable_table=self.table_var.get()
+                        enable_table=self.table_var.get(),
+                        remove_watermark=self.watermark_var.get()
                     )
                 else:
                     self.log("Word工作流处理...\n", 'info')
@@ -695,8 +1245,12 @@ class MinerUtoMDGUI:
             import traceback
             self.log(f"\n错误: {str(e)}\n", 'error')
             self.log(traceback.format_exc(), 'error')
-            self.status_var.set("转换失败")
-            messagebox.showerror("错误", f"转换失败: {str(e)}")
+            self.root.after(0, lambda: self.status_var.set("转换失败"))
+            self.root.after(0, lambda: messagebox.showerror("错误", f"转换失败: {str(e)}"))
+        finally:
+            self.is_running = False
+            self.is_paused = False
+            self.log("任务结束\n", 'info')
     
     def load_config(self):
         """加载配置文件"""

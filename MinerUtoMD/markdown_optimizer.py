@@ -24,6 +24,7 @@ class MarkdownOptimizer:
         self.normalize_headers = self.config.get('normalize_headers', True)
         self.fix_list_indent = self.config.get('fix_list_indent', True)
         self.optimize_tables = self.config.get('optimize_tables', True)
+        self.table_output_mode = self.config.get('table_output_mode', 'markdown')
         self.remove_html_tags = self.config.get('remove_html_tags', False)
     
     def optimize(
@@ -187,8 +188,9 @@ class MarkdownOptimizer:
     
     def _optimize_tables(self, content: str) -> str:
         """优化表格格式 - 将 HTML 表格转换为 Markdown 表格"""
-        # 先转换 HTML 表格为 Markdown 表格
-        content = self._convert_html_tables(content)
+        # 先转换 HTML 表格为 Markdown 表格，或按配置保留 HTML 表格
+        if self.table_output_mode != 'preserve_html':
+            content = self._convert_html_tables(content)
         
         # 确保表格分隔行格式正确
         lines = content.split('\n')

@@ -20,15 +20,27 @@ mineru:
   enable_table: false
   # 后端: pipeline (本地模型), hybrid-auto-engine (需要VLM模型)
   backend: "pipeline"
+  # 计算设备: auto (自动检测), cuda (GPU), cpu, npu
+  # GPU 加速可显著提升公式识别和表格识别速度
+  # auto 模式会自动检测是否有可用的 CUDA 设备
+  device: "auto"
+  # 模型来源: local, huggingface, modelscope
+  # local 避免运行时联网下载，需配置 mineru_tools_config_json
+  model_source: "local"
+  mineru_tools_config_json: "D:/Dmate工作区/MInerUtoMD/MinerUtoMD/mineru_local_models.json"
+  hf_home: "D:/CDriveMoved/hf_cache"
+  hf_hub_cache: "D:/CDriveMoved/hf_cache/hub"
+  # MinerU 子进程超时（秒）
+  timeout: 600
 
 # Pandoc 配置
 pandoc:
   # Pandoc 可执行文件路径
-  path: "C:/Users/Administrator/AppData/Local/Microsoft/WinGet/Packages/JohnMacFarlane.Pandoc_Microsoft.Winget.Source_8wekyb3d8bbwe/pandoc-3.9.0.2/pandoc.exe"
+  path: "D:/CDriveMoved/miniforge3/envs/mineru2/Library/bin/pandoc.exe"
   # Word输出模板（可选）
   word_template: null
   # PDF引擎
-  pdf_engine: "wkhtmltopdf"  # 或 "xelatex", "weasyprint"
+  pdf_engine: "D:/CDriveMoved/miniforge3/envs/mineru2/Library/bin/wkhtmltopdf.exe"  # 或 "xelatex", "weasyprint"
   # 默认输出格式
   default_format: "docx"
   # 额外参数
@@ -46,8 +58,25 @@ markdown_optimizer:
   fix_list_indent: true
   # 是否优化表格格式
   optimize_tables: true
+  # 表格输出策略: markdown（HTML表格转Markdown）, preserve_html（尽量保留HTML表格）
+  table_output_mode: "markdown"
   # 是否移除HTML标签
   remove_html_tags: false
+
+# 水印去除配置
+watermark_remover:
+  # 去除模式: fast (快速，基于颜色阈值), deep (深度，基于边缘+频域分析)
+  mode: "fast"
+  # 快速模式：水印灰度范围（仅检测浅色水印，如浅灰/白色半透明水印）
+  # 范围越窄越精确，误伤越少；(220,255) 适合大多数浅色水印
+  # 如果水印颜色偏深，可降低下限如 (180,255)
+  watermark_gray_range: [220, 255]
+  # 最小水印面积（像素），低于此值的连通域不处理
+  min_area: 500
+  # Inpaint 修复半径，越大修复越平滑但越慢
+  inpaint_radius: 5
+  # 深度模式灵敏度 (0-1)，越高检测越灵敏但也越容易误伤正文
+  deep_sensitivity: 0.3
 
 # 输出配置
 output:

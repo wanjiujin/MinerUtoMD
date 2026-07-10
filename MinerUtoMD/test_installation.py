@@ -39,7 +39,7 @@ def test_imports():
         return False
     
     try:
-        from workflow import PDFWorkflow, WordWorkflow
+        from doc_workflow import PDFWorkflow, WordWorkflow
         print("[OK] Workflow 模块导入成功")
     except Exception as e:
         print(f"[FAIL] Workflow 导入失败: {e}")

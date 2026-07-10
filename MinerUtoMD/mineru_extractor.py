@@ -5,20 +5,30 @@ MinerU PDF 提取模块
 import os
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
 
+# Windows 上隐藏子进程窗口
+if sys.platform == 'win32':
+    SUBPROCESS_FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+else:
+    SUBPROCESS_FLAGS = 0
+
+
 
 class MinerUExtractor:
     """MinerU PDF提取器"""
     
-    # 新版 MinerU 3.x CLI 路径
-    MINERU_CLI_V3 = r"C:\ProgramData\miniforge3\envs\mineru2\Scripts\mineru.exe"
-    # 旧版 magic-pdf CLI 路径
-    MINERU_CLI_V1 = r"C:\ProgramData\miniforge3\envs\mineru\Scripts\magic-pdf.exe"
+    # Python 解释器路径
+    PYTHON_V3 = r"D:\CDriveMoved\miniforge3\envs\mineru2\python.exe"
+    PYTHON_V1 = r"D:\CDriveMoved\miniforge3\envs\mineru\python.exe"
+    # CLI 路径（备用）
+    MINERU_CLI_V3 = r"D:\CDriveMoved\miniforge3\envs\mineru2\Scripts\mineru.exe"
+    MINERU_CLI_V1 = r"D:\CDriveMoved\miniforge3\envs\mineru\Scripts\magic-pdf.exe"
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -28,6 +38,10 @@ class MinerUExtractor:
             config: 配置字典
         """
         self.config = config or {}
+        self.python_v3 = self.config.get('python_v3') or self.config.get('python_exe_v3') or self.PYTHON_V3
+        self.python_v1 = self.config.get('python_v1') or self.config.get('python_exe_v1') or self.PYTHON_V1
+        self.mineru_cli_v3 = self.config.get('mineru_cli_v3') or self.MINERU_CLI_V3
+        self.mineru_cli_v1 = self.config.get('mineru_cli_v1') or self.MINERU_CLI_V1
         self.keep_images = self.config.get('keep_images', True)
         self.image_dir = self.config.get('image_dir', 'images')
         # MinerU 解析方法: ocr, txt, auto
@@ -37,26 +51,154 @@ class MinerUExtractor:
         self.enable_formula = self.config.get('enable_formula', True)
         # 表格识别
         self.enable_table = self.config.get('enable_table', False)
+        # MinerU 子进程超时秒数
+        self.timeout = int(self.config.get('timeout', self.config.get('mineru_timeout', 1800)))
         # 后端: pipeline (本地模型), hybrid-auto-engine (需要VLM模型)
         self.backend = self.config.get('backend', 'pipeline')
+        # 设备: auto (自动检测), cuda (GPU), cpu, npu
+        self.device = self.config.get('device', 'auto')
         
         # 检测使用哪个版本
         self._detect_version()
+        # 自动检测 GPU
+        self._detect_device()
     
     def _detect_version(self):
         """检测 MinerU 版本"""
-        if Path(self.MINERU_CLI_V3).exists():
-            self.cli_path = self.MINERU_CLI_V3
+        if Path(self.python_v3).exists():
+            self.python_exe = self.python_v3
+            self.cli_path = self.mineru_cli_v3
             self.version = 3
             logger.info("使用 MinerU 3.x (支持公式识别)")
-        elif Path(self.MINERU_CLI_V1).exists():
-            self.cli_path = self.MINERU_CLI_V1
+        elif Path(self.python_v1).exists():
+            self.python_exe = self.python_v1
+            self.cli_path = self.mineru_cli_v1
             self.version = 1
             logger.info("使用 MinerU 1.x (magic-pdf, 不支持公式识别)")
+        elif shutil.which('mineru'):
+            self.python_exe = sys.executable
+            self.cli_path = shutil.which('mineru')
+            self.version = 3
+            logger.info("使用 PATH 中的 MinerU 3.x CLI")
+        elif shutil.which('magic-pdf'):
+            self.python_exe = sys.executable
+            self.cli_path = shutil.which('magic-pdf')
+            self.version = 1
+            logger.info("使用 PATH 中的 MinerU 1.x (magic-pdf)")
         else:
+            self.python_exe = None
             self.cli_path = None
             self.version = None
             logger.warning("未找到 MinerU 安装")
+    
+    def _detect_device(self):
+        """自动检测并设置计算设备"""
+        if self.device != 'auto':
+            logger.info(f"设备模式: {self.device} (手动指定)")
+            return
+        
+        # 尝试检测 CUDA
+        try:
+            import subprocess
+            result = subprocess.run(
+                [self.python_exe or 'python', '-c',
+                 'import torch; print("cuda" if torch.cuda.is_available() else "cpu")'],
+                capture_output=True, text=True, timeout=15,
+                creationflags=SUBPROCESS_FLAGS
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                self.device = result.stdout.strip()
+                logger.info(f"自动检测设备: {self.device}")
+            else:
+                self.device = 'cpu'
+                stderr = result.stderr[:200] if result.stderr else ""
+                logger.info(f"自动检测设备: cpu (torch 检测失败: rc={result.returncode}, stderr={stderr})")
+        except Exception as e:
+            self.device = 'cpu'
+            logger.info(f"自动检测设备: cpu (异常: {e})")
+    
+    @staticmethod
+    def detect_gpu(python_exe: str = None) -> dict:
+        """
+        静态方法：检测 GPU 可用性（供 GUI 调用）
+        
+        Args:
+            python_exe: Python 解释器路径，默认使用 'python'
+        
+        Returns:
+            dict: {
+                'has_cuda': bool,
+                'device_name': str or None,
+                'cuda_version': str or None,
+                'vram_mb': int or None,
+                'error': str or None
+            }
+        """
+        python_exe = python_exe or 'python'
+        info = {
+            'has_cuda': False,
+            'device_name': None,
+            'cuda_version': None,
+            'vram_mb': None,
+            'error': None
+        }
+        
+        # 方案1: 通过 torch 检测（使用指定 Python 环境）
+        try:
+            import subprocess
+            result = subprocess.run(
+                [python_exe, '-c',
+                 'import torch; '
+                 'print(torch.cuda.is_available()); '
+                 'print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else ""); '
+                 'print(torch.version.cuda or ""); '
+                  'print(int(torch.cuda.get_device_properties(0).total_memory / 1024 / 1024) if torch.cuda.is_available() else 0)'],
+                capture_output=True, text=True, timeout=15,
+                creationflags=SUBPROCESS_FLAGS
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) >= 4 and lines[0].strip() == 'True':
+                    info['has_cuda'] = True
+                    info['device_name'] = lines[1].strip() or None
+                    info['cuda_version'] = lines[2].strip() or None
+                    try:
+                        info['vram_mb'] = int(lines[3].strip()) or None
+                    except ValueError:
+                        pass
+                    return info
+                else:
+                    info['error'] = f"torch.cuda.is_available()={lines[0].strip() if lines else 'unknown'}"
+            else:
+                info['error'] = f"torch 检测失败: rc={result.returncode}"
+                if result.stderr:
+                    info['error'] += f", stderr={result.stderr[:200]}"
+        except Exception as e:
+            info['error'] = f"torch 检测异常: {str(e)}"
+        
+        # 方案2: nvidia-smi 备选（确认硬件驱动正常）
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                capture_output=True, text=True, timeout=10,
+                creationflags=SUBPROCESS_FLAGS
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                line = result.stdout.strip().split('\n')[0]
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) >= 2:
+                    info['device_name'] = parts[0]
+                    mem_str = parts[1].replace('MiB', '').replace('MB', '').strip()
+                    try:
+                        info['vram_mb'] = int(mem_str)
+                    except ValueError:
+                        pass
+                    info['error'] = (info['error'] or "") + "; nvidia-smi 正常，PyTorch 可能缺少 CUDA 支持"
+        except Exception:
+            pass
+        
+        return info
     
     def check_installation(self) -> bool:
         """检查MinerU是否正确安装"""
@@ -69,7 +211,8 @@ class MinerUExtractor:
                 result = subprocess.run(
                     [cmd, '--version'],
                     capture_output=True,
-                    text=True
+                    text=True,
+                    creationflags=SUBPROCESS_FLAGS
                 )
                 if result.returncode == 0:
                     return True
@@ -84,9 +227,18 @@ class MinerUExtractor:
         env = os.environ.copy()
         
         # 设置 HuggingFace 镜像（解决国内访问问题）
-        env['HF_ENDPOINT'] = 'https://hf-mirror.com'
+        env['HF_ENDPOINT'] = self.config.get('hf_endpoint', env.get('HF_ENDPOINT', 'https://hf-mirror.com'))
         # 设置短路径缓存目录（解决 Windows 路径长度限制）
-        env['HF_HOME'] = 'C:/hf_cache'
+        hf_home = self.config.get('hf_home', env.get('HF_HOME', 'D:/CDriveMoved/hf_cache'))
+        hf_hub_cache = self.config.get('hf_hub_cache', str(Path(hf_home) / 'hub'))
+        xdg_cache_home = self.config.get('xdg_cache_home', str(Path(hf_home).parent))
+        env['HF_HOME'] = hf_home
+        env['HF_HUB_CACHE'] = hf_hub_cache
+        env['HUGGINGFACE_HUB_CACHE'] = hf_hub_cache
+        env['XDG_CACHE_HOME'] = xdg_cache_home
+        env['MINERU_MODEL_SOURCE'] = self.config.get('model_source', env.get('MINERU_MODEL_SOURCE', 'huggingface'))
+        if self.config.get('mineru_tools_config_json'):
+            env['MINERU_TOOLS_CONFIG_JSON'] = self.config['mineru_tools_config_json']
         
         return env
     
@@ -124,37 +276,80 @@ class MinerUExtractor:
                 'error': f'PDF文件不存在: {pdf_path}'
             }
         
+        if not self.check_installation() or self.version is None:
+            return {
+                'success': False,
+                'error': 'MinerU未安装或未配置可用路径，请安装 mineru/magic-pdf 或在 config.yaml 中配置 Python/CLI 路径'
+            }
+        
         output_dir.mkdir(parents=True, exist_ok=True)
         
         try:
             # 设置环境变量
             env = self._setup_environment()
             
-            # 根据版本构建命令
+            # 构建命令
             if self.version == 3:
                 cmd = self._build_v3_command(pdf_path, output_dir, **kwargs)
-            else:
+            elif self.version == 1:
                 cmd = self._build_v1_command(pdf_path, output_dir, **kwargs)
-            
-            logger.info(f"执行命令: {' '.join(cmd)}")
-            
-            # 执行命令 - 增加超时时间
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                env=env,
-                timeout=600  # 10分钟超时
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"MinerU执行失败: {result.stderr}")
+            else:
                 return {
                     'success': False,
-                    'error': result.stderr
+                    'error': '未检测到可用的 MinerU 版本'
                 }
+            
+            # 通过环境变量控制设备（MinerU CLI 不支持 --device 参数）
+            if self.device == 'cpu':
+                env['CUDA_VISIBLE_DEVICES'] = ''
+            elif self.device == 'cuda':
+                env['CUDA_VISIBLE_DEVICES'] = '0'
+            
+            logger.info(f"执行命令: {' '.join(cmd)}")
+            logger.info(f"工作目录: {os.getcwd()}")
+            logger.info(f"MinerU版本: {self.version}")
+            
+            # MinerU 3.x 会启动临时 API 子进程；用 pipe 捕获输出时在 Windows 上可能卡住。
+            # 将输出写入日志文件，失败时再读取日志尾部。
+            log_path = output_dir / 'mineru_cli.log'
+            with open(log_path, 'w', encoding='utf-8', errors='replace') as log_file:
+                result = subprocess.run(
+                    cmd,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    env=env,
+                    timeout=self.timeout,
+                    creationflags=SUBPROCESS_FLAGS
+                )
+            
+            try:
+                log_text = log_path.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                log_text = ''
+            
+            logger.info(f"MinerU返回码: {result.returncode}")
+            if log_text:
+                logger.info(f"MinerU log: {log_text[-2000:]}")
+            
+            if result.returncode != 0:
+                error_detail = log_text.strip()
+                if not error_detail:
+                    error_detail = f"MinerU返回非零退出码(rc={result.returncode})"
+                logger.error(f"MinerU执行失败 (rc={result.returncode}): {error_detail[:1000]}")
+                return {
+                    'success': False,
+                    'error': f"MinerU执行失败 (rc={result.returncode}): {error_detail[:600]}"
+                }
+            
+            # 记录输出目录内容用于调试
+            logger.info(f"MinerU执行完成，检查输出目录: {output_dir}")
+            if output_dir.exists():
+                all_files = list(output_dir.rglob('*'))[:20]
+                for f in all_files:
+                    logger.info(f"  输出文件: {f}")
             
             # 查找输出的Markdown文件
             markdown_path = self._find_markdown_output(output_dir, pdf_path)
@@ -185,12 +380,14 @@ class MinerUExtractor:
             }
     
     def _build_v3_command(self, pdf_path: Path, output_dir: Path, **kwargs) -> list:
-        """构建 MinerU 3.x 命令"""
+        """构建 MinerU 3.x 命令（通过 python -m 调用，确保打包后环境正确）"""
+        # 使用 python -m mineru.cli.client 而非直接调用 mineru.exe
+        # 这样打包后的程序能通过显式指定的 python.exe 找到所有依赖
         cmd = [
-            self.cli_path,
+            self.python_exe, '-m', 'mineru.cli.client',
             '-p', str(pdf_path),
             '-o', str(output_dir),
-            '-b', self.backend,  # pipeline, hybrid-auto-engine
+            '-b', self.backend,
             '-m', self.parse_method,
             '-l', self.ocr_lang,
         ]

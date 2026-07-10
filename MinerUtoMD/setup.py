@@ -1,7 +1,7 @@
 """
 MinerUtoMD 安装配置
 """
-from setuptools import setup, find_packages
+from setuptools import setup
 
 with open('README.md', 'r', encoding='utf-8') as f:
     long_description = f.read()
@@ -14,7 +14,19 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/dumate/minerutomd',
-    packages=find_packages(),
+    py_modules=[
+        'main',
+        'doc_workflow',
+        'mineru_extractor',
+        'pandoc_converter',
+        'markdown_optimizer',
+        'watermark_remover',
+        'environment_diagnostics',
+        'quality_checker',
+        'task_manifest',
+        'gui',
+        'gui_simple',
+    ],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',

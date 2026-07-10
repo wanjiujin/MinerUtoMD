@@ -1,0 +1,17 @@
+# MinerUtoMD 依赖
+# 核心依赖（打包时已内置）
+tkinter; sys_platform == 'win32'
+click>=8.1.0
+rich>=13.0.0
+pyyaml>=6.0
+python-docx>=0.8.11
+markdown>=3.5
+beautifulsoup4>=4.12.0
+
+# 水印去除（可选，需用户在 mineru2 环境安装）
+opencv-python>=4.8.0
+pymupdf>=1.23.0
+
+# 外部工具（需单独安装）
+# pandoc: https://pandoc.org/installing.html
+# mineru: pip install mineru[full]
