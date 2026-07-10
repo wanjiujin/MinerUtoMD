@@ -243,16 +243,16 @@ class MinerUExtractor:
         env = os.environ.copy()
         
         # 设置 HuggingFace 镜像（解决国内访问问题）
-        env['HF_ENDPOINT'] = self.config.get('hf_endpoint', env.get('HF_ENDPOINT', 'https://hf-mirror.com'))
+        env['HF_ENDPOINT'] = self.config.get('hf_endpoint') or env.get('HF_ENDPOINT', 'https://hf-mirror.com')
         # 设置短路径缓存目录（解决 Windows 路径长度限制）
-        hf_home = self.config.get('hf_home', env.get('HF_HOME', 'D:/CDriveMoved/hf_cache'))
-        hf_hub_cache = self.config.get('hf_hub_cache', str(Path(hf_home) / 'hub'))
-        xdg_cache_home = self.config.get('xdg_cache_home', str(Path(hf_home).parent))
+        hf_home = self.config.get('hf_home') or env.get('HF_HOME') or 'D:/CDriveMoved/hf_cache'
+        hf_hub_cache = self.config.get('hf_hub_cache') or env.get('HF_HUB_CACHE') or str(Path(hf_home) / 'hub')
+        xdg_cache_home = self.config.get('xdg_cache_home') or env.get('XDG_CACHE_HOME') or str(Path(hf_home).parent)
         env['HF_HOME'] = hf_home
         env['HF_HUB_CACHE'] = hf_hub_cache
         env['HUGGINGFACE_HUB_CACHE'] = hf_hub_cache
         env['XDG_CACHE_HOME'] = xdg_cache_home
-        env['MINERU_MODEL_SOURCE'] = self.config.get('model_source', env.get('MINERU_MODEL_SOURCE', 'huggingface'))
+        env['MINERU_MODEL_SOURCE'] = self.config.get('model_source') or env.get('MINERU_MODEL_SOURCE', 'huggingface')
         if self.config.get('mineru_tools_config_json'):
             env['MINERU_TOOLS_CONFIG_JSON'] = self.config['mineru_tools_config_json']
         

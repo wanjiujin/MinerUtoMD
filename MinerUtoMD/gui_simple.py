@@ -152,6 +152,18 @@ class MinerUtoMDApp:
         if self.pdf_engine:
             pandoc_cfg['pdf_engine'] = self.pdf_engine
 
+        local_model_config = self.app_dir() / "mineru_local_models.json"
+        if local_model_config.exists() and not mineru_cfg.get('mineru_tools_config_json'):
+            mineru_cfg['mineru_tools_config_json'] = str(local_model_config)
+            mineru_cfg['model_source'] = 'local'
+
+        default_hf_home = Path(r"D:\CDriveMoved\hf_cache")
+        if default_hf_home.exists() and not mineru_cfg.get('hf_home'):
+            mineru_cfg['hf_home'] = str(default_hf_home)
+        default_hf_hub = default_hf_home / "hub"
+        if default_hf_hub.exists() and not mineru_cfg.get('hf_hub_cache'):
+            mineru_cfg['hf_hub_cache'] = str(default_hf_hub)
+
         hf_home = mineru_cfg.get('hf_home')
         hf_hub_cache = mineru_cfg.get('hf_hub_cache')
         if hf_home:
